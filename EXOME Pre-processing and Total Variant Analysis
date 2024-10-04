@@ -1,0 +1,137 @@
+############################################### KEY: C508 = Normal Myometrium (NM), C509 = UL, C510 = CDUL ###############################################
+
+####### Reading in extracted variants as data frames
+C508indels <- read.delim("C508indel.table", header = TRUE, sep = "\t")
+C509indels <- read.delim("C509indel.table", header = TRUE, sep = "\t")
+C510indels <- read.delim("C510indel.table", header = TRUE, sep = "\t")
+C508snps <- read.delim("C508snp.table", header = TRUE, sep = "\t")
+C509snps <- read.delim("C509snp.table", header = TRUE, sep = "\t")
+C510snps <- read.delim("C510snp.table", header = TRUE, sep = "\t")
+
+####### Converting SNP and InDel data frames to GRanges
+grC508indels <- GRanges(
+  seqnames = C508indels$CHROM,
+  ranges = IRanges(C508indels$POS, end = C508indels$POS),
+  REF = C508indels$REF,
+  ALT = C508indels$ALT, 
+  Genotype = C508indels$C508.GT
+)
+grC509indels <- GRanges(
+  seqnames = C509indels$CHROM,
+  ranges = IRanges(C509indels$POS, end = C509indels$POS),
+  REF = C509indels$REF,
+  ALT = C509indels$ALT, 
+  Genotype = C509indels$C509.GT
+)
+grC510indels <- GRanges(
+  seqnames = C510indels$CHROM,
+  ranges = IRanges(C510indels$POS, end = C510indels$POS),
+  REF = C510indels$REF,
+  ALT = C510indels$ALT, 
+  Genotype = C510indels$C510.GT
+)
+grC508snps <- GRanges(
+  seqnames = C508snps$CHROM,
+  ranges = IRanges(C508snps$POS, end = C508snps$POS),
+  REF = C508snps$REF,
+  ALT = C508snps$ALT, 
+  Genotype = C508snps$C508.GT
+)
+grC509snps <- GRanges(
+  seqnames = C509snps$CHROM,
+  ranges = IRanges(C509snps$POS, end = C509snps$POS),
+  REF = C509snps$REF,
+  ALT = C509snps$ALT, 
+  Genotype = C509snps$C509.GT
+)
+grC510snps <- GRanges(
+  seqnames = C510snps$CHROM,
+  ranges = IRanges(C510snps$POS, end = C510snps$POS),
+  REF = C510snps$REF,
+  ALT = C510snps$ALT, 
+  Genotype = C510snps$C510.GT
+)
+
+####### Combining SNP and InDel GRanges for each sample to create GRanges of all variants
+grC508 <- c(grC508indels, grC508snps)
+grC509 <- c(grC509indels, grC509snps)
+grC510 <- c(grC510indels, grC510snps)
+
+####### Reduce identical ranges within total variant GRanges
+grC508b<-reduce(grC508)     
+grC509b <- reduce(grC509)  
+grC510b <- reduce(grC510)
+
+####### Filtering for valid human chromosomes and assigning a plot value of 1 to each variant (for later variant counts within each mutated gene)
+valid_chromosomes <- c("chr1","chr2","chr3","chr4","chr5","chr6","chr7","chr8","chr9",
+                       "chr10","chr11","chr12","chr13","chr14","chr15","chr16","chr17","chr18",
+                       "chr19","chr20","chr21","chr22","chrX")
+
+grC508b <- grC508b[seqnames(grC508b) %in% valid_chromosomes]
+levels(seqnames(grC508b))
+grC508b <- dropSeqlevels(grC508b, c("chrM", "chrY"))
+mcols(grC508b)$plotvalue <- 1
+
+grC509b <- grC509b[seqnames(grC509b) %in% valid_chromosomes]
+grC509b <- dropSeqlevels(grC509b, c("chrM", "chrY"))
+mcols(grC509b)$plotvalue <- 1
+
+grC510b <- grC510b[seqnames(grC510b) %in% valid_chromosomes]
+grC510b <- dropSeqlevels(grC510b, c("chrM", "chrY"))
+mcols(grC510b)$plotvalue <- 1
+
+####### Calculate number of unique variants relative to another sample
+unique_CDUL_NM <- setdiff(grC510b, grC508b)
+print(length(unique_CDUL_NM))
+  #768887 unique
+
+unique_CDUL_UL <- setdiff(grC510b, grC509b)
+print(length(unique_CDUL_UL))
+  #766609 unique
+
+unique_UL_NM <- setdiff(grC509b, grC508b)
+print(length(unique_UL_NM))
+  #338268 unique
+
+unique_UL_WT <- setdiff( grC509b, grC510b)
+print(length(unique_UL_WT))
+  #320313 unique
+
+####### Calculate number of overlaps between both unique variant GRanges, then calculate total unique variants for UL and CDUL samples
+CDULtotal_overlaps <- sum_Overlaps(unique_CDUL_UL, unique_CDUL_NM)
+print(length(CDULtotal_overlaps))
+  #733824 overlaps 
+  # so total variants unique to CDUL compared to at least one other sample = (768887 - 733824) + (766609 - 733824) + 733824 = 801672
+CDULtotal_variants <- 801672
+
+NFtotal_overlaps <- sum_Overlaps(unique_NF_WT, unique_NF_NM)
+print(length(NFtotal_overlaps))
+  #303181 overlaps
+  # so total variants unique to UL compared to at least one other sample = (338268 - 303181) + (320313 - 303181) + 303181 = 355400
+ULtotal_variants <- 355400
+
+####### Binning up total unique variants for UL and CDUL for later visualisation
+library(GenomicRanges)
+library(BSgenome.Hsapiens.UCSC.hg38)
+
+  # Create 1000000 bp bins for CDUL and UL, filter for valid chromosomes
+genome <- seqlengths(BSgenome.Hsapiens.UCSC.hg38)
+bins <- tileGenome(seqlengths = genome, tilewidth = 1000000, cut.last.tile.in.chrom = TRUE)
+
+bins_CDUL <- bins[seqnames(bins) %in% valid_chromosomes]
+bins_CDUL <- dropSeqlevels(bins, 24:length(levels(seqnames(bins))))
+bins_CDUL <- bins_WT[seqnames(bins_CDUL) %in% valid_chromosomes]
+
+bins_UL <- bins[seqnames(bins) %in% valid_chromosomes]
+bins_UL <- dropSeqlevels(bins, 24:length(levels(seqnames(bins))))
+bins_UL <- bins_NF[seqnames(bins_UL) %in% valid_chromosomes]
+
+  # Sum the number of variants falling within each bin and store these as a new metadata column in bins GRanges. Finally, convert bins to data frame for later visualisation
+variant_counts_CDUL <- countOverlaps(bins_CDUL, unique_CDUL)
+mcols(bins_CDUL)$variant_count <- variant_counts_CDUL
+df_bin_data_CDUL <- as.data.frame(bins_CDUL)
+
+variant_counts_UL <- countOverlaps(bins_UL, unique_UL)
+mcols(bins_UL)$variant_count <- variant_counts_UL
+df_bin_data_UL <- as.data.frame(bins_UL)
+
