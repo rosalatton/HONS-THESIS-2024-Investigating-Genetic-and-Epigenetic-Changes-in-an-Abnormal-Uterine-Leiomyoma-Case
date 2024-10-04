@@ -1,0 +1,162 @@
+################################## filterUniqueSNPs custom function for filtering, annotating, and performing KEGG pathway analysis on variants unique to gr1 compared to gr2 
+
+filterUniqueSNPs <- function(gr1, gr2, valid_chromosomes = NULL) {
+  # Load required libraries
+  library(GenomicRanges)
+  library(BSgenome.Hsapiens.UCSC.hg38)
+  library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+  library(ChIPseeker)
+  library(AnnotationDbi)
+  library(org.Hs.eg.db)
+  library(clusterProfiler)
+  library(regioneR)
+
+  # Set valid chromosomes
+  if (is.null(valid_chromosomes)) {
+    valid_chromosomes <- c(
+      "chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9",
+      "chr10", "chr11", "chr12", "chr13", "chr14", "chr15", "chr16", "chr17", "chr18",
+      "chr19", "chr20", "chr21", "chr22", "chrX"
+    )
+  }
+
+  # Find overlaps between the two GRanges objects
+  overlaps <- findOverlaps(gr1, gr2)
+print("there are this many genes that overlap in the two samples:")
+print(length(overlaps))
+  # Identify variants where alternative genotypes are the same (therefore the variants are identical between samples)
+  genes_cut <- mcols(gr1[queryHits(overlaps)])$ALT == mcols(gr2[subjectHits(overlaps)])$ALT
+  unique_genotype <- queryHits(overlaps)[!genes_cut]
+
+# Subtract these regions from the first GRanges object and add gr2 alternative genotype information for variant sites as metadata columns
+unique_snps <- gr1[unique_genotype]
+unique_snps$Sample_two_ALT <- gr2[subjectHits(overlaps)[!genes_cut]]$ALT
+unique_snps$Sample_two_Genotype <- gr2[subjectHits(overlaps)[!genes_cut]]$Genotype
+unique_snps$Sample_Two_position <-gr2[subjectHits(overlaps)[!genes_cut]]$start
+
+print("This is a sense check to make sure that the SNPs that were aligned between the two dataframes are at the same genomic locations")
+print(table(as.data.frame(ranges(unique_snps))$start == as.data.frame(ranges(gr2[subjectHits(overlaps)[!genes_cut]]))$start))
+
+
+print("table of number of genes with same genotype in sample 1 vs sample 2 ")
+print(table(genes_cut)) 
+
+
+  # Apply valid chromosomes to filter out mtDNA and other unwanted chromosomes from the SNPs. Add plot value of 1 to each variants
+  unique_snps_filtered <- unique_snps[seqnames(unique_snps) %in% valid_chromosomes]
+  unique_snps_filtered <- dropSeqlevels(unique_snps_filtered, c("chrM", "chrY"))
+  mcols(unique_snps_filtered)$plotvalue <- 1
+
+  # Create 1000000 bp bins
+  #genome <- seqlengths(BSgenome.Hsapiens.UCSC.hg38)
+  #genome <- genome[1:23] # Exclude mtDNA
+  #bins <- tileGenome(seqlengths = genome, tilewidth = 1000000, cut.last.tile.in.chrom = TRUE)
+
+  # Annotate the filtered GRanges object
+  txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
+  annotations <- annotatePeak(unique_snps_filtered, TxDb=txdb, tssRegion=c(-3000, 3000), 
+                              annoDb="org.Hs.eg.db", level="gene")
+
+  # Convert annotations object to a data frame
+  annotations <- as.data.frame(annotations)
+
+  # Convert annotations object to GRanges object
+
+final_data <- toGRanges(data.frame(
+    chr = annotations$geneChr,
+    start = annotations$geneStart,
+    end = annotations$geneEnd,
+    Variant_chr = annotations$seqnames,
+    Variant_start = annotations$start,
+    Variant_end = annotations$end,
+    REF = annotations$REF,
+    ALT_sample_one = annotations$ALT,
+    Genotype_sample_one = annotations$Genotype,
+    ALT_sample_two=annotations$Sample_two_ALT,
+    Genotype_sample_two=annotations$Sample_two_Genotype,
+    plotvalue = annotations$plotvalue,
+    Gene_region = annotations$annotation,
+    gene_name = annotations$SYMBOL,
+    GeneID = annotations$geneId
+))
+
+  # reduce final_data to combine variants found within the same gene
+  gr_reduced <- reduce(final_data)
+
+  # Sum the scores for each reduced range to find total number of variants located within each gene and filter gene info so there is only one row for each gene
+  overlaps <- findOverlaps(gr_reduced, final_data)  
+  score_aggregated <- tapply(final_data$plotvalue[subjectHits(overlaps)], queryHits(overlaps), sum)
+  GeneID_aggregated <- tapply(final_data$GeneID[subjectHits(overlaps)], queryHits(overlaps), function(x) unique(x))
+  GeneID_Name <- tapply(final_data$gene_name[subjectHits(overlaps)], queryHits(overlaps), function(x) unique(x))
+  Variant_chr <- tapply(final_data$Variant_chr[subjectHits(overlaps)], queryHits(overlaps), function(x) unique(x))
+  Variant_positions <- tapply(final_data$Variant_start[subjectHits(overlaps)], queryHits(overlaps), list)
+  Sample_one_Genotype <- tapply(final_data$Genotype_sample_one[subjectHits(overlaps)], queryHits(overlaps), list)
+  Sample_two_Genotype <- tapply(final_data$Genotype_sample_two[subjectHits(overlaps)], queryHits(overlaps), list)
+
+  # Copy the above into gr_reduced as metadata columns
+  gr_reduced$Variant_per_gene <- score_aggregated
+  gr_reduced$GeneID <- GeneID_aggregated
+  gr_reduced$GeneName <- GeneID_Name
+  gr_reduced$Variant_chr <- Variant_chr
+  gr_reduced$Variant_positions <- Variant_positions
+  gr_reduced$Sample_one_Genotype <- Sample_one_Genotype
+  gr_reduced$Sample_two_Genotype <- Sample_two_Genotype
+
+  # Extract gene symbols and remove NAs
+  gene_symbols <- unique(gr_reduced$GeneID[!is.na(gr_reduced$GeneID)])
+  
+  # Perform KEGG pathway enrichment analysis
+  kegg_enrichment <- enrichKEGG(gene = gene_symbols, organism = 'hsa', pvalueCutoff = 1)
+  kegg_results <- as.data.frame(kegg_enrichment)
+
+  # Print pathway results (optional)
+  print(kegg_results)
+
+  # Return the final annotated GRanges object
+return(gr_reduced)
+}
+
+######################## Application to CDUL and UL SNP GRanges to remove variants that are also present in the normal myometrium ########################
+## Apply filterUniqueSNPs
+CDUL_snps_cfNM <- filterUniqueSNPs(grC510snps, grC508snps)
+print(length(CDUL_snps_cfNM))
+  # 199 unique SNPs
+
+UL_snps_cfNM <- filterUniqueSNPs(grC509snps, grC508snps)
+print(length(UL_snps_cfNM))
+  # 140 unique SNPs
+
+## Count the number of overlaps between filtered SNP GRanges using custom function sum_Overlaps
+sum_Overlaps <- function(gr1, gr2) {
+  overlap_counts <- countOverlaps(gr1, gr2)
+  total_overlaps <- sum(overlap_counts)
+  print(total_overlaps)
+}
+
+CDUL_UL_uniqueSNPoverlaps <- sum_Overlaps(WT_snps_cfNM, NF_snps_cfNM)
+  # 62 overlaps. Therefore:
+  # 199 - 62 = 137 SNPs unique to CDUL only
+  # 140 - 62 = 78 SNPs unique to UL only
+
+## Create GRanges of all shared CDUL and UL SNPs that are unique compared to NM using plyranges
+library(plyranges)
+
+overlapping_rangesCDUL_ULSNPs <- WT_snps_cfNM %>%
+  join_overlap_inner(NF_snps_cfNM)
+
+## Subtract overlaps from CDUL_snps_cfNM and UL_snps_cfNM to create GRanges of fully unique SNPs for each sample
+overlap_indices <- findOverlaps(WT_snps_cfNM, overlapping_rangesCDUL_ULSNPs)
+non_overlap_indices <- setdiff(seq_along(WT_snps_cfNM), queryHits(overlap_indices))
+CDUL_unique_SNPs <- WT_snps_cfNM[non_overlap_indices]
+
+overlap_indices <- findOverlaps(NF_snps_cfNM, overlapping_rangesCDUL_ULSNPs)
+non_overlap_indices <- setdiff(seq_along(NF_snps_cfNM), queryHits(overlap_indices))
+UL_unique_SNPs <- NF_snps_cfNM[non_overlap_indices]
+
+### Then can save fully unique SNPs for CDUL and UL as .csv to read in Excel (optional)
+
+
+
+
+
+
