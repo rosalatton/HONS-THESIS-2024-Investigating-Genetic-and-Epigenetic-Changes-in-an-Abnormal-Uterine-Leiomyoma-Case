@@ -1,0 +1,127 @@
+############################################### KEY: C507 = Normal Myometrium (NM), C505 = UL, C506 = CDUL ###############################################
+
+# Reading in CpG filtered Bismark cytosine report
+CpG_C505 <- fread("/external/data/Rosa/Meth_retry/extracted/output_forward_paired_C505_S1_R1_bismark_bt2_pe.CX_report.txt", header = FALSE, sep = "\t") 
+colnames(CpG_C505) <- c("Chromosome", "Start", "Strand", "Methylated", "UnMethylated", "Context", "Sequence")
+
+CpG_C506 <- fread("/external/data/Rosa/Meth_retry/extracted/output_forward_paired_C506_S2_R1_bismark_bt2_pe.CX_report.txt", header = FALSE, sep = "\t") 
+colnames(CpG_C506) <- c("Chromosome", "Start", "Strand", "Methylated", "UnMethylated", "Context", "Sequence")
+
+CpG_C507 <- fread("/external/data/Rosa/Meth_retry/extracted/output_forward_paired_C507_S3_R1_bismark_bt2_pe.CX_report.txt", header = FALSE, sep = "\t") 
+colnames(CpG_C507) <- c("Chromosome", "Start", "Strand", "Methylated", "UnMethylated", "Context", "Sequence")
+
+# Reading in Bismark methylation data
+methylation_data_c506 <- read.table(("/external/data/Rosa/Meth_retry/extracted/output_forward_paired_C506_S2_R1_bismark_bt2_pe.bismark.cov"), header = FALSE)
+
+methylation_data_c507 <- read.table(("/external/data/Rosa/Meth_retry/extracted/output_forward_paired_C507_S3_R1_bismark_bt2_pe.bismark.cov"), header = FALSE)
+
+methylation_data_c505 <- fread(("/external/data/Rosa/Meth_retry/extracted/output_forward_paired_C505_S1_R1_bismark_bt2_pe.bismark.cov"), header = FALSE)
+
+####### process_methylation_data custom function for data preparation of CpG data
+process_methylation_data <- function(methylation_data) {
+  library("dplyr")
+  # Rename columns
+  colnames(methylation_data) <- c("Chromosome", "Start", "End", "Methylated_Percent", "Methylated_Reads", "Unmethylated_Reads")
+  
+  # Calculate total coverage
+  methylation_data$Total_Coverage <- methylation_data$Methylated_Reads + methylation_data$Unmethylated_Reads
+  
+  # Check initial dimensions
+  print(dim(methylation_data))
+  
+  # Filter out rows with total coverage less than 8
+  cut <- (as.numeric(methylation_data$Total_Coverage) < 8)
+  print(table(cut))
+  methylation_data <- methylation_data[!cut, ]
+  
+  # Check chromosome levels before filtering
+  print(levels(methylation_data$Chromosome))
+  
+  # Filter for human chromosomes (1-22 and X) and drop unused levels
+  methylation_data <- methylation_data %>%
+    filter(Chromosome %in% c(1:22, "X")) %>%
+    mutate(Chromosome = droplevels(factor(Chromosome))
+  
+  # Check dimensions after filtering
+  print(dim(methylation_data))
+  
+  # Print final chromosome levels
+  print(levels(methylation_data$Chromosome))
+  
+  # Return the processed data
+  return(methylation_data)
+}
+
+# Apply to methylation data
+methylation_data_c505 <- process_methylation_data(methylation_data_c505)
+methylation_data_c506 <- process_methylation_data(methylation_data_c506)
+methylation_data_c507 <- process_methylation_data(methylation_data_c507)
+
+# Combine CpG and methylation data by genomic position
+methylation_data_c505b <- merge(methylation_data_c505, CpG_C505,
+  by = c("Chromosome", "Start")
+)
+methylation_data_c506b <- merge(methylation_data_c506, CpG_C506,
+  by = c("Chromosome", "Start")
+)
+methylation_data_c507b <- merge(methylation_data_c507, CpG_C507,
+  by = c("Chromosome", "Start")
+)
+
+####### compare_methylation custom function for comparing methylation between two samples
+compare_methylation <- function(df1, df2){
+
+ifelse(colnames(df1) == colnames(df2), print("Colnames Match"), print("Warning Colnames Don't match"))
+
+# Merge the dataframes based on Chromosome, Start, and End positions
+merged_data <- merge(df1, df2,
+  by = c("Chromosome", "Start", "End"),
+  suffixes = c("_df1", "_df2")
+)
+
+# Calculate the difference in methylation percentage
+merged_data$Methylation_Diff <- merged_data$Methylated_Percent_df1 - merged_data$Methylated_Percent_df2
+
+# View the first few rows
+head(merged_data)
+dim((merged_data))
+
+
+# Set a threshold for significant methylation differences
+threshold <- 10 # 10% difference as an example
+
+# Filter for regions with significant differences
+significant_diff <- merged_data %>%
+  filter(abs(Methylation_Diff) >= threshold)
+  return(significant_diff)
+}
+
+# Apply to methylation data
+c505_c506<-compare_methylation(methylation_data_c505,methylation_data_c506)
+c505_c507<-compare_methylation(methylation_data_c505,methylation_data_c507)
+c506_c507<-compare_methylation(methylation_data_c506,methylation_data_c507)
+
+# Convert output to dataframe and save as .csv for Excel analysis
+mcols(c505_c507) <- lapply(mcols(c505_c507), as.character)
+mcols(c506_c505) <- lapply(mcols(c506_c505), as.character)
+mcols(c506_c507) <- lapply(mcols(c506_c507), as.character)
+
+c505_c507df <- as.data.frame(c505_c507)
+c506_c505df <- as.data.frame(c506_c505)
+c506_c507df <- as.data.frame(c506_c507)
+
+write.csv(as.data.frame(c505_c507), file = "c505_c507df.csv", row.names=FALSE)
+write.csv(as.data.frame(c506_c505), file = "c506_c505df.csv", row.names=FALSE)
+write.csv(as.data.frame(c506_c507), file = "c506_c507df.csv", row.names=FALSE)
+
+# Analysis compare_methylation outputs to find DMRs unique to CDUL and save as .csv for Excel analysis
+overlaps <- findOverlaps(c506_c507, c505_c507)
+cut<-mcols(c506_c507[queryHits(overlaps)])$GeneName == mcols(c505_c507[subjectHits(overlaps)])$GeneName
+unique_CDUL <- queryHits(overlaps)[cut]
+unique_CDUL_clean <- na.omit(unique_CDUL)
+CDUL <- c506_c507[unique_CDUL_clean]
+  
+CDULdf <- as.data.frame(CDUL)
+write.csv(as.data.frame(CDULdf), file = "CDULuniqueDMRgenes.csv", row.names=FALSE)
+
+  ### Done ###
