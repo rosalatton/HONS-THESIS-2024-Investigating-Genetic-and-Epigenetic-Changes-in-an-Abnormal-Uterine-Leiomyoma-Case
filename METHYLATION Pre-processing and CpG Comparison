@@ -1,4 +1,4 @@
-############################################### KEY: C507 = Normal Myometrium (NM), C505 = UL, C506 = CDUL ###############################################
+############################################### KEY: C507 = Normal Myometrium (NM), C505 = UL, C506 = CDUL ############################################### 
 
 # Reading in CpG filtered Bismark cytosine report
 CpG_C505 <- fread("/external/data/Rosa/Meth_retry/extracted/output_forward_paired_C505_S1_R1_bismark_bt2_pe.CX_report.txt", header = FALSE, sep = "\t") 
