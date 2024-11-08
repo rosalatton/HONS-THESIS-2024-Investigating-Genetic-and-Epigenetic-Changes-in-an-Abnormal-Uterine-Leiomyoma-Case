@@ -1,6 +1,6 @@
-################################## filterUniqueSNPs custom function for filtering, annotating, and performing KEGG pathway analysis on variants unique to gr1 compared to gr2 
+################################## FilterUniqueVariants custom function for filtering, annotating, and performing KEGG pathway analysis on variants unique to gr1 compared to gr2 
 
-filterUniqueSNPs <- function(gr1, gr2, valid_chromosomes = NULL) {
+FilterUniqueVariants <- function(gr1, gr2, valid_chromosomes = NULL) {
   # Load required libraries
   library(GenomicRanges)
   library(BSgenome.Hsapiens.UCSC.hg38)
@@ -117,12 +117,12 @@ return(gr_reduced)
 }
 
 ######################## Application to CDUL and UL SNP GRanges to remove variants that are also present in the normal myometrium ########################
-## Apply filterUniqueSNPs
-CDUL_snps_cfNM <- filterUniqueSNPs(grC510snps, grC508snps)
+## Apply FilterUniqueVariants
+CDUL_snps_cfNM <- FilterUniqueVariants(grC510snps, grC508snps)
 print(length(CDUL_snps_cfNM))
   # 199 unique SNPs
 
-UL_snps_cfNM <- filterUniqueSNPs(grC509snps, grC508snps)
+UL_snps_cfNM <- FilterUniqueVariants(grC509snps, grC508snps)
 print(length(UL_snps_cfNM))
   # 140 unique SNPs
 
