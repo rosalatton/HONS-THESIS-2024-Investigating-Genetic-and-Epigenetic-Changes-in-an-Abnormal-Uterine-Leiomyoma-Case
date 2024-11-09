@@ -1,0 +1,43 @@
+process_methylation_data <- function(methylation_data) {
+  # load required packages
+  library(dplyr)
+  library(GenomicRanges)
+  library(BSgenome.Hsapiens.UCSC.hg38)
+  library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+  library(ChIPseeker)
+  library(AnnotationDbi)
+  library(org.Hs.eg.db)
+  library(clusterProfiler)
+  library(regioneR)
+  
+  # Rename columns as per the new format
+  colnames(methylation_data) <- c("chr", "start", "strand", "numCs", "numTs", "context", "sequence", "coverage", "Methylated_Percent")
+  
+  # Calculate total coverage
+  methylation_data$coverage <- methylation_data$numCs + methylation_data$numTs
+  
+  # Check initial dimensions
+  print(dim(methylation_data))
+  
+  # Filter out rows with total coverage less than 20
+  cut <- (as.numeric(methylation_data$coverage) < 20)
+  print(table(cut))
+  methylation_data <- methylation_data[!cut, ]
+  
+  # Convert the chromosome column to a factor
+  methylation_data$chr <- as.factor(methylation_data$chr)
+  
+  # Check chromosome levels before filtering
+  print(levels(methylation_data$chr))
+  
+  # Filter for human chromosomes (1-22 and X) and drop unused levels
+  methylation_data <- methylation_data %>%
+    filter(chr %in% c(1:22, "X")) %>%
+    mutate(chr = droplevels(chr))
+
+  print(dim(methylation_data))
+  print(levels(methylation_data$chr))
+  
+  # Return the processed data
+  return(methylation_data)
+}
