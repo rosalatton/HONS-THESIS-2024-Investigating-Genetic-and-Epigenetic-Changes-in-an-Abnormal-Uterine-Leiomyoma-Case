@@ -1,0 +1,158 @@
+# Use process_methylation_data() output files for df1 and df2
+
+compare_methylation <- function(df1, df2) {
+  # Load required packages
+  library(dplyr)
+  library(GenomicRanges)
+  library(regioneR)
+  print(">>All differences will be calculated as df1 subtracted from df2, use df1 as normal tissue")
+
+  # Ensure column names match
+  ifelse(colnames(df1) == colnames(df2), print("Colnames Match"), print("Warning Colnames Don't match"))
+
+  # Calculate total coverage per sample
+  total_coverage_df1 <- sum(df1$coverage)
+  total_coverage_df2 <- sum(df2$coverage)
+
+  # Calculate normalization factors
+  norm_factor_df1 <- total_coverage_df1 / mean(df1$coverage)
+  norm_factor_df2 <- total_coverage_df2 / mean(df2$coverage)
+
+  # Normalize numCs and numTs for df1 and df2
+  df1$numCs <- df1$numCs / norm_factor_df1
+  df1$numTs <- df1$numTs / norm_factor_df1
+  df2$numCs <- df2$numCs / norm_factor_df2
+  df2$numTs <- df2$numTs / norm_factor_df2
+
+print(">> normalised coverage has been applied")
+
+  # Recalculate Methylated_Percent after normalization
+  df1$Methylated_Percent <- (df1$numCs / (df1$numCs + df1$numTs)) * 100
+  df2$Methylated_Percent <- (df2$numCs / (df2$numCs + df2$numTs)) * 100
+
+  # Merge the dataframes based on chr (Chromosome) and start (Start positions)
+  merged_data <- merge(df1, df2, by = c("chr", "start"), suffixes = c("_df1", "_df2"))
+
+  # Ensure data is sorted by chromosome and start position
+  merged_data <- merged_data %>% arrange(chr, start)
+
+  # Calculate the difference in methylation percentage
+  merged_data$Methylation_Diff <- merged_data$Methylated_Percent_df1 - merged_data$Methylated_Percent_df2
+
+  # Define parameters for adaptive sliding window
+  genomic_window_size <- 1000   
+  print(paste0(" Defined the window size in base pairs", sep=" as ", genomic_window_size)) 
+  min_cpgs_in_window <- 30       
+    print(paste0(" Defined  minimum number of CpGs to include in a window", sep=" as ", min_cpgs_in_window) )
+
+  methylation_threshold <- 25   
+    print(paste0("Defined methylation difference threshold for all CpGs in window", sep=" as ", methylation_threshold) )
+
+
+  print("Creating adaptive sliding window dataframe based on genomic distances and CpG content")
+  adaptive_sliding_window_methylation <- function(data, genomic_window_size, min_cpgs_in_window, threshold) {
+    result <- data.frame(
+      chr = character(), 
+      start = numeric(), 
+      end = numeric(), 
+      avg_methylation_df1 = numeric(), 
+      avg_methylation_df2 = numeric(),
+      num_CpGs = numeric()
+    )
+    
+    i <- 1
+    while (i <= nrow(data)) {
+      current_chr <- data$chr[i]
+      window_start <- data$start[i]
+      window_end <- window_start
+      num_cpgs <- 1
+      
+      # Expand window based on genomic distance, and stop when the distance exceeds the threshold or the chromosome changes
+      for (j in (i + 1):nrow(data)) {
+        if (data$chr[j] != current_chr || (data$start[j] - window_start) > genomic_window_size) {
+          break
+        }
+        window_end <- data$start[j]
+        num_cpgs <- num_cpgs + 1
+      }
+      
+      # Check if the window has enough CpGs
+      if (num_cpgs >= min_cpgs_in_window) {
+        window_data <- data[i:(i + num_cpgs - 1), ]
+        
+        avg_methyl_df1 <- mean(window_data$Methylated_Percent_df1, na.rm = TRUE)
+        avg_methyl_df2 <- mean(window_data$Methylated_Percent_df2, na.rm = TRUE)
+        
+        if (all(abs(window_data$Methylation_Diff) > threshold)) {
+          result <- rbind(result, data.frame(
+            chr = current_chr,
+            start = window_start,
+            end = window_end,
+            avg_methylation_df1 = avg_methyl_df1,
+            avg_methylation_df2 = avg_methyl_df2,
+            num_CpGs = num_cpgs
+          ))
+        }
+      }
+      
+      # Move to the next window (adjust 'i' to start after the current window)
+      i <- i + num_cpgs
+    }
+    
+    return(result)
+  }
+  
+  print(">>Apply adaptive sliding window to data")
+  significant_windows <- adaptive_sliding_window_methylation(merged_data, genomic_window_size, min_cpgs_in_window, methylation_threshold)
+  
+  # Check if significant windows were found
+  if (nrow(significant_windows) == 0) {
+    print("No significant windows found.")
+    return(NULL)
+  }
+
+  print("Significant windows with methylation > threshold over CpG loci")
+  head(significant_windows)
+  
+  # Convert significant windows into GRanges object
+  significant_windowsGR <- GRanges(
+    seqnames = paste0("chr", significant_windows$chr),
+    ranges = IRanges(significant_windows$start, end = significant_windows$end)
+  )
+  
+  significant_windows$difference_methylation <- significant_windows$avg_methylation_df1 - significant_windows$avg_methylation_df2
+
+  significant_windows$Direction_change <- ifelse(significant_windows$difference_methylation > 0, "Decreased_methylation", "Increased_methylation")
+
+  # Annotate the regions
+  library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+    library(ChIPseeker)
+
+  txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
+  annotations <- annotatePeak(significant_windowsGR,
+      TxDb = txdb, tssRegion = c(-3000, 3000),
+      annoDb = "org.Hs.eg.db", level = "gene"
+  )
+  
+  annotations <- as.data.frame(annotations)
+  
+  # Final DataFrame including summary of CpGs and average methylation difference
+  final_data <- data.frame(
+    chr = annotations$seqnames,
+    start = annotations$start,
+    end = annotations$end,
+    DMR_length=annotations$end - annotations$start,
+    avg_methylation_df1 = significant_windows$avg_methylation_df1,
+    avg_methylation_df2 = significant_windows$avg_methylation_df2,
+    difference_average_methylation = significant_windows$difference_methylation,
+    Direction_change = significant_windows$Direction_change,
+    num_CpGs = significant_windows$num_CpGs,  # Add number of CpGs
+    annotation = annotations$annotation,
+    geneId = annotations$geneId,
+    SYMBOL = annotations$SYMBOL,
+    GENENAME = annotations$GENENAME,
+    distanceToTSS = annotations$distanceToTSS
+  )
+  
+  return(final_data)
+}
